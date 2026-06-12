@@ -1,77 +1,160 @@
+--!strict
+
+export type OverrideEntry = {
+    instance: Instance,
+    properties: { [string]: any }?,
+    attributes: { [string]: any }?,
+    defaultProps: { [string]: any },
+    defaultAttrs: { [string]: any },
+    delete: boolean,
+}
+
 local override = {
-    list = {},
+    list = {} :: { [string]: OverrideEntry },
 }; do
-    --[[
-        two modes supported:
-        - instance mode: override.new(instance, values)
-            instance: instance to override
-            values: table with values
+    local function restoreOrDelete(entry: OverrideEntry)
+        if not (entry.instance and entry.instance.Parent) then return end
 
-        - class mode: override.new(parent, class, values)
-            parent: parent to search for class
-            class: class to search for
-            values: table with values
-    ]]
-    override.new = function(parent, class, values)
-        local delete = false
-        local instance = nil
-
-        if not values then
-            values = class
-            instance = parent
+        if entry.delete then
+            entry.instance:Destroy()
         else
-            instance = parent:FindFirstChildOfClass(class)
+            if entry.properties then
+                for key, value in pairs(entry.defaultProps) do
+                    (entry.instance :: any)[key] = value
+                end
+            end
+
+            if entry.attributes then
+                for key, value in pairs(entry.defaultAttrs) do
+                    entry.instance:SetAttribute(key, value)
+                end
+            end
+        end
+    end
+
+    function override.fromInstance(
+        index: string, 
+        instance: Instance, 
+        properties: { [string]: any }?, 
+        attributes: { [string]: any }?
+    ): boolean
+        if override.list[index] then return false end
+
+        local defaultProps = {}
+        local defaultAttrs = {}
+
+        if properties then
+            for key, _ in pairs(properties) do
+                defaultProps[key] = (instance :: any)[key]
+            end
         end
 
-        if override.list[instance] then
-            return false
+        if attributes then
+            for key, _ in pairs(attributes) do
+                defaultAttrs[key] = instance:GetAttribute(key)
+            end
         end
+
+        override.list[index] = {
+            instance = instance,
+            properties = properties,
+            attributes = attributes,
+            defaultProps = defaultProps,
+            defaultAttrs = defaultAttrs,
+            delete = false,
+        }
+
+        return true
+    end
+
+    function override.fromClass(
+        index: string, 
+        parent: Instance, 
+        className: string, 
+        properties: { [string]: any }?, 
+        attributes: { [string]: any }?
+    ): boolean
+        if override.list[index] then return false end
+
+        local instance = parent:FindFirstChildOfClass(className)
+        local delete = false
 
         if not instance then
             delete = true
-
-            instance = Instance.new(class)
-            instance.Name = class
+            instance = Instance.new(className)
+            instance.Name = className
             instance.Parent = parent
         end
 
-        local defaults = {}
-        for key, _ in pairs(values) do
-            if delete then
-                break
-            end
+        local defaultProps = {}
+        local defaultAttrs = {}
 
-            defaults[key] = instance[key]
+        if not delete then
+            if properties then
+                for key, _ in pairs(properties) do
+                    defaultProps[key] = (instance :: any)[key]
+                end
+            end
+            if attributes then
+                for key, _ in pairs(attributes) do
+                    defaultAttrs[key] = instance:GetAttribute(key)
+                end
+            end
         end
 
-        override.list[instance] = {
-            instance = instance,
-            values = values,
-            defaults = defaults,
+        override.list[index] = {
+            instance = instance :: Instance,
+            properties = properties,
+            attributes = attributes,
+            defaultProps = defaultProps,
+            defaultAttrs = defaultAttrs,
             delete = delete,
         }
 
         return true
     end
 
-    override.set = function()
-        for instance, entry in pairs(override.list) do
-            for key, value in pairs(entry.values) do
-                entry.instance[key] = value
+    function override.set(indices: string | { string })
+        if type(indices) == "string" then
+            indices = { indices }
+        end
+
+        for _, index in pairs(indices :: { string }) do
+            local entry = override.list[index]
+            if not entry or not entry.instance then continue end
+
+            if entry.properties then
+                for key, value in pairs(entry.properties) do
+                    (entry.instance :: any)[key] = value
+                end
+            end
+
+            if entry.attributes then
+                for key, value in pairs(entry.attributes) do
+                    entry.instance:SetAttribute(key, value)
+                end
             end
         end
     end
 
-    override.clear = function()
-        for instance, entry in pairs(override.list) do
-            if entry.delete then
-                entry.instance:Destroy()
-                continue
-            end
+    function override.clear(indices: string | { string })
+        if type(indices) == "string" then
+            indices = { indices }
+        end
 
-            for key, value in pairs(entry.defaults) do
-                entry.instance[key] = value
+        for _, index in pairs(indices :: { string }) do
+            local entry = override.list[index]
+            if entry then
+                restoreOrDelete(entry)
+                override.list[index] = nil
             end
+        end
+    end
+
+    function override.clearAll()
+        for index, entry in pairs(override.list) do
+            restoreOrDelete(entry)
+            override.list[index] = nil
         end
     end
 end
