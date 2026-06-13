@@ -1,27 +1,24 @@
 local callbacks = {
     setup = {},
     connections = {},
+    unload_tasks = {},
     input_connect = nil,
     unhook_button = Enum.KeyCode.F1,
-    unhook_text = nil,
+    unhook_text = "Hooks removed successfully",
     inited = false,
-    services = {},
-    log = print,
-    autoinit = true,
-}; do
-    callbacks.services = {
+    services = {
         RunService = game:GetService("RunService"),
         UserInputService = game:GetService("UserInputService"),
-        unload = {},
-    }
+    },
+    log = print,
+}; do
+    local function err_handler(e)
+        return debug.traceback(tostring(e), 2)
+    end
 
     local function safe_wrap(fn)
         return function(...)
-            local function err(e)
-                return debug.traceback(e, 2)
-            end
-
-            local ok, msg = xpcall(fn, err, ...)
+            local ok, msg = xpcall(fn, err_handler, ...)
             if not ok then
                 warn(msg)
             end
@@ -31,15 +28,16 @@ local callbacks = {
     ---@param serviceName string
     ---@param eventName string
     ---@param fn function
+    ---@return RBXScriptConnection|nil
     function callbacks.add(serviceName, eventName, fn)
-        fn = safe_wrap(fn)
+        local wrapped_fn = safe_wrap(fn)
 
         local service = callbacks.services[serviceName]
         if not service then
-            local success, srv = pcall(game.GetService, game, serviceName)
+            local success, srv = pcall(function() return game:GetService(serviceName) end)
             if not success then
-                error("Service not found: " .. tostring(serviceName))
-                return
+                warn("Service not found: " .. tostring(serviceName))
+                return nil
             end
             service = srv
             callbacks.services[serviceName] = service
@@ -48,29 +46,24 @@ local callbacks = {
         if not callbacks.setup[eventName] then
             callbacks.setup[eventName] = {}
         end
-        table.insert(callbacks.setup[eventName], {service = service, fn = fn})
+        table.insert(callbacks.setup[eventName], {service = service, fn = wrapped_fn})
 
         if callbacks.inited and service[eventName] then
-            table.insert(callbacks.connections, service[eventName]:Connect(fn))
+            local connection = service[eventName]:Connect(wrapped_fn)
+            table.insert(callbacks.connections, connection)
+            return connection
         end
+
+        return nil
     end
 
     ---@param fn function
     function callbacks.unload(fn)
-        if type(fn) == "string" then
-            callbacks.unhook_text = fn
-            return
-        end
-
-        fn = safe_wrap(fn)
-
-        table.insert(callbacks.services.unload, fn)
+        table.insert(callbacks.unload_tasks, safe_wrap(fn))
     end
 
     function callbacks.init(text)
-        if callbacks.inited then
-            return
-        end
+        if callbacks.inited then return end
 
         for eventName, entries in pairs(callbacks.setup) do
             for _, entry in ipairs(entries) do
@@ -96,24 +89,23 @@ local callbacks = {
         text = text or callbacks.unhook_text
 
         for _, conn in ipairs(callbacks.connections) do
-            conn:Disconnect()
+            if conn.Connected then
+                conn:Disconnect()
+            end
         end
-
         callbacks.connections = {}
+
         if callbacks.input_connect then
             callbacks.input_connect:Disconnect()
             callbacks.input_connect = nil
         end
 
-        for _, fn in ipairs(callbacks.services.unload) do
+        for _, fn in ipairs(callbacks.unload_tasks) do
             fn()
         end
+        callbacks.unload_tasks = {}
 
         callbacks.inited = false
-        callbacks.log(text or "Hooks removed successfully")
-    end
-
-    if callbacks.autoinit then
-        callbacks.init()
+        callbacks.log(text)
     end
 end
